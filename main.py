@@ -8,6 +8,7 @@ from queue import Queue
 import uuid
 import os
 import httpx
+from time import time
 
 AUDIO_ROOT = os.path.join(os.getcwd(), "audio")
 
@@ -56,11 +57,12 @@ def run_audio_stream():
     print(f"run_audio_stream - Saved file")
     print(f"run_audio_stream - Transcribing...")
 
+    start_time = time()
     response = http_client.post(
         url="http://127.0.0.1:9953/inference",
         data={
-            "temperature": "0.0",
-            "temperature_inc": "0.2",
+            #"temperature": "0.0",
+            #"temperature_inc": "0.2",
             "response_format": "json"
         },
         files={
@@ -76,6 +78,8 @@ def run_audio_stream():
     print("")
     print(f"{TERM_BLUE}{response}{TERM_RESET}")
     print("")
+
+    print(f"run_audio_stream - Transcribed in {round(time() - start_time, 2)}s")
 
     META["feedback"].set()
 
