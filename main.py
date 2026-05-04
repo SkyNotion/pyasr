@@ -7,6 +7,7 @@ from threading import Thread, Event
 from queue import Queue
 import uuid
 import os
+import httpx
 
 AUDIO_ROOT = os.path.join(os.getcwd(), "audio")
 
@@ -25,6 +26,14 @@ META = {
     "thread": None,
     "queue": Queue()
 }
+
+TERM_BOLD_WHITE = "\033[1;90m"
+TERM_NORMAL = "\033[22m"
+TERM_GREEN = "\033[32m"
+TERM_BLUE = "\033[34m"
+TERM_RESET = "\033[0m"
+
+http_client = httpx.Client(timeout=500000) 
 
 def gen_short_uuid(prefix = ""):
     return f"{prefix}{str(uuid.uuid4()).split("-")[4]}"
@@ -45,10 +54,37 @@ def run_audio_stream():
     print(f"run_audio_stream - Saving file to {file_path}")
     write(file_path, SAMPLE_RATE, recording)
     print(f"run_audio_stream - Saved file")
+    print(f"run_audio_stream - Transcribing...")
+
+    response = http_client.post(
+        url="http://127.0.0.1:9953/inference",
+        data={
+            "temperature": "0.0",
+            "temperature_inc": "0.2",
+            "response_format": "json"
+        },
+        files={
+            "file": open(file_path, "rb")
+        }
+    )
+
+    response = response.json()
+    response = response["text"]
+    response = [x.strip() for x in response.splitlines() if len(x) > 0]
+    response = "\n".join(response)
+
+    print("")
+    print(f"{TERM_BLUE}{response}{TERM_RESET}")
+    print("")
+
     META["feedback"].set()
 
 def main():
+    print("main - Started")
     while True:
+        if not META["active"]:
+            print("main - Ready...")
+
         k = readkey()
         if k != key.SPACE:
             continue
