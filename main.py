@@ -80,7 +80,7 @@ def run_audio_stream():
     print("")
 
     print(f"run_audio_stream - Transcribed in {round(time() - start_time, 2)}s")
-
+    META["buffer"].clear()
     META["feedback"].set()
 
 def main():
