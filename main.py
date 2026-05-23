@@ -34,10 +34,51 @@ TERM_GREEN = "\033[32m"
 TERM_BLUE = "\033[34m"
 TERM_RESET = "\033[0m"
 
-http_client = httpx.Client(timeout=500000) 
+WHISPER_CPP = "whisper.cpp"
+OPENAI_API = "openai.api"
+
+http_client = httpx.Client(timeout=500000)
 
 def gen_short_uuid(prefix = ""):
     return f"{prefix}{str(uuid.uuid4()).split("-")[4]}"
+
+def inference(file_path, engine):
+    if engine == WHISPER_CPP:
+        response = http_client.post(
+            url="http://127.0.0.1:9953/inference",
+            data={
+                #"temperature": "0.0",
+                #"temperature_inc": "0.2",
+                "response_format": "json"
+            },
+            files={
+                "file": open(file_path, "rb")
+            }
+        )
+    
+        response = response.json()
+        response = response["text"]
+        response = [x.strip() for x in response.splitlines() if len(x) > 0]
+        return "\n".join(response)
+    elif engine == OPENAI_API:
+        response = http_client.post(
+            url="http://127.0.0.1:9953/v1/audio/transcriptions",
+            data={
+                "prompt": "Transcribe to text",
+                "model": "Qwen3-ASR",
+                "response_format": "json",
+                "language": "English",
+                "temperature": "0.01",
+            },
+            files={
+                "file": open(file_path, "rb")
+            }
+        )
+
+        response = response.json()
+        response = response["text"].replace("language English<asr_text>", "")
+        response = [x.strip() for x in response.splitlines() if len(x) > 0]
+        return "\n".join(response)
 
 def audio_callback(indata, frames, time, status):
     META["buffer"].append(indata.copy())
@@ -58,22 +99,7 @@ def run_audio_stream():
     print(f"run_audio_stream - Transcribing...")
 
     start_time = time()
-    response = http_client.post(
-        url="http://127.0.0.1:9953/inference",
-        data={
-            #"temperature": "0.0",
-            #"temperature_inc": "0.2",
-            "response_format": "json"
-        },
-        files={
-            "file": open(file_path, "rb")
-        }
-    )
-
-    response = response.json()
-    response = response["text"]
-    response = [x.strip() for x in response.splitlines() if len(x) > 0]
-    response = "\n".join(response)
+    response = inference(file_path, OPENAI_API)
 
     print("")
     print(f"{TERM_BLUE}{response}{TERM_RESET}")
@@ -83,7 +109,22 @@ def run_audio_stream():
     META["buffer"].clear()
     META["feedback"].set()
 
+def serve_audio():
+    from http.server import SimpleHTTPRequestHandler
+    import socketserver
+    
+    PORT = 11492
+    try:
+        handler = lambda *a, **kw: SimpleHTTPRequestHandler(*a, directory=AUDIO_ROOT, **kw)
+        socketserver.TCPServer.allow_reuse_address = True
+        with socketserver.TCPServer(("", PORT), handler) as httpd:
+            print(f"Serving audio files at port {PORT}")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"serve_audio - Error - {e}")
+
 def main():
+    Thread(target=serve_audio).start()
     print("main - Started")
     while True:
         if not META["active"]:
