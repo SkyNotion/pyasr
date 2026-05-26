@@ -48,6 +48,8 @@ Rules:
 4. Do not add any new technical requirements that were not implied in the original text.
 5. Output ONLY the cleaned prompt. Do not include conversational replies like "Here is your text."'''
 
+USE_CLEANER = False
+
 def gen_short_uuid(prefix = ""):
     return f"{prefix}{str(uuid.uuid4()).split("-")[4]}"
 
@@ -140,11 +142,12 @@ def run_audio_stream(file_path = None):
     print(f"{TERM_BLUE}Raw\n----------\n{response}{TERM_RESET}")
     print("")
 
-    response = llm_cleaner(response)
-
-    print("")
-    print(f"{TERM_BLUE}Cleaned\n----------\n{response}{TERM_RESET}")
-    print("")
+    if USE_CLEANER:
+        response = llm_cleaner(response)
+    
+        print("")
+        print(f"{TERM_BLUE}Cleaned\n----------\n{response}{TERM_RESET}")
+        print("")
 
     print(f"run_audio_stream - Transcribed in {round(time() - start_time, 2)}s")
     META["buffer"].clear()
