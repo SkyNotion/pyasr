@@ -8,6 +8,7 @@ from queue import Queue
 import uuid
 import os
 import httpx
+import gc
 import pyperclip
 from time import time
 from dotenv import load_dotenv
@@ -27,6 +28,8 @@ AUDIO_ROOT = os.path.join(os.getcwd(), "audio")
 
 if not os.path.exists(AUDIO_ROOT):
     os.mkdir(AUDIO_ROOT)
+
+sd.default.device = (None, None)
 
 SAMPLE_RATE = 48000
 CHANNELS = 2
@@ -53,20 +56,46 @@ OPENAI_API = "openai.api"
 http_client = httpx.Client(timeout=500000)
 
 CLEANER_PROMPT = '''\
-You are an expert prompt engineer. Your task is to take messy, raw ASR (speech-to-text) transcripts and convert them into clear text.
-Rules:
-1. Remove all conversational filler (um, ah, okay).
-2. Fix obvious phonetic transcription errors.
-3. Do not add any new technical requirements that were not implied in the original text.
-4. Output ONLY the cleaned prompt. Do not include conversational replies like "Here is your text."'''
+You are a transcription editor. Your job is to clean raw Whisper ASR output into polished, readable text while preserving the speaker's original meaning and voice.
+
+## Rules
+
+**Fix silently (never mention):**
+- Remove Whisper hallucinations: repeated phrases, looping sentences, and phantom words that appear mid-sentence with no semantic context
+- Remove filler words: "um", "uh", "like", "you know", "sort of", "kind of", "I mean" — unless the speaker is clearly using them for stylistic emphasis
+- Remove false starts and self-corrections (e.g., "I went — I was going to the store" → "I was going to the store")
+- Fix punctuation: add missing commas, periods, question marks; remove erroneous ones
+- Fix capitalization: proper nouns, sentence starts, "I"
+- Merge or split run-on and fragmented sentences for natural flow
+- Strip artifact tokens: [BLANK_AUDIO], [MUSIC], [NOISE], [inaudible], (inaudible), (crosstalk), and similar Whisper tags — replace only if something audible was clearly meant
+- Fix obvious word-boundary errors from ASR (e.g., "alot" → "a lot", "gonna" → "going to" unless the informal register is intentional)
+- Normalize spacing and remove duplicate whitespace
+
+**Preserve always:**
+- The speaker's vocabulary and sentence structure — do not rephrase or paraphrase
+- Domain-specific terminology, acronyms, and proper nouns — do not "correct" words you don't recognize; flag them instead
+- Intentional informal register (contractions, slang) if consistent throughout
+- Meaningful repetitions used for emphasis ("really, really important")
+- Numbers, dates, and figures exactly as spoken
+
+**When uncertain:**
+- If a word or phrase is likely misheared but you cannot determine the correct form, output it as [unclear: ]
+- If a segment appears to be wholesale hallucination (nonsensical repetition unrelated to surrounding context), remove it and insert [removed: hallucination]
+- Do not invent words or complete sentences — mark gaps
+
+## Output format
+Return only the cleaned transcript. No preamble, no commentary, no explanations. If the input contains speaker labels (SPEAKER_00, SPEAKER_01, etc.), preserve them on separate lines.
+
+## Input
+The raw Whisper transcript follows.'''
 
 USE_CLEANER = os.getenv("USE_CLEANER", "false").lower() == "true"
 
 def gen_short_uuid(prefix = ""):
-    return f"{prefix}{str(uuid.uuid4()).split("-")[4]}"
+    return f"{prefix}-{str(time())}-{str(uuid.uuid4()).split("-")[4]}"
 
 def convert_wav_to_m4a(input_path):
-    file_path = f"{AUDIO_ROOT}/{gen_short_uuid("rec-conv-")}.m4a"
+    file_path = f"{AUDIO_ROOT}/{gen_short_uuid("rec-conv")}.m4a"
     audio = AudioSegment.from_wav(input_path)
     audio.export(file_path, format="ipod", codec="aac")
     print(f"convert_wav_to_m4a - Converted to m4a - {os.path.basename(input_path)} -> {os.path.basename(file_path)}")
@@ -129,7 +158,10 @@ def inference(file_path, engine):
             url=f"{TRANSCRIPTION_BASE_URL}/v1/audio/transcriptions",
             data={
                 "model": TRANSCRIPTION_MODEL,
-                "response_format": "json"
+                "response_format": "json",
+                "language": "en",
+                "temperature": "0.0",
+                "prompt": "Transcribe to text"
             },
             files={
                 "file": open(file_path, "rb")
@@ -181,23 +213,31 @@ def inference(file_path, engine):
         response = [x.strip() for x in response.splitlines() if len(x) > 0]
         return "\n".join(response)
 
-def audio_callback(indata, frames, time, status):
-    META["buffer"].append(indata.copy())
-
 def run_audio_stream(file_path = None):
     if file_path is None:
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, latency="high",
-                    blocksize=BLOCK_SIZE, callback=audio_callback, device=DEVICE):
-            print("run_audio_stream - Started recording")
-            META["event"].wait(timeout=None)
-            print("run_audio_stream - Stopping recording")
-            META["event"].clear()
+        record_time = time()
+        full_recording = sd.rec(
+            int(1000 * SAMPLE_RATE),
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype="float32",
+            device=DEVICE
+        )
+        print("run_audio_stream - Started recording")
+        META["event"].wait(timeout=None)
+        record_duration = time() - record_time
+        print("run_audio_stream - Stopping recording")
 
-            recording = np.concatenate(META["buffer"], axis=0)
+        recording = full_recording[:min(int(record_duration * SAMPLE_RATE), len(full_recording))]
+
+        del full_recording
+        gc.collect()
+
         file_path = f"{AUDIO_ROOT}/{gen_short_uuid("rec")}.wav"
         print(f"run_audio_stream - Saving file to {file_path}")
         write(file_path, SAMPLE_RATE, recording)
         print(f"run_audio_stream - Saved file")
+
     print(f"run_audio_stream - Transcribing...")
 
     start_time = time()
@@ -223,6 +263,7 @@ def run_audio_stream(file_path = None):
     print(f"run_audio_stream - Transcribed in {round(time() - start_time, 2)}s")
     META["buffer"].clear()
     META["feedback"].set()
+    META["event"].clear()
 
 def serve_audio():
     from http.server import SimpleHTTPRequestHandler
@@ -250,7 +291,7 @@ def main():
         if k != key.SPACE:
             continue
 
-        print(f"main - Pressed space - {"recording" if META["active"] else "stopped"}")
+        print(f"main - Pressed space - {"stopped" if META["active"] else "recording"}")
 
         META["active"] = not META["active"]
 
@@ -258,6 +299,7 @@ def main():
             META["thread"] = Thread(target=run_audio_stream)
             META["thread"].start()
         else:
+            sd.stop()
             META["event"].set()
             META["feedback"].wait(timeout=None)
             META["feedback"].clear()
