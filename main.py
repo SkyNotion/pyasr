@@ -16,6 +16,8 @@ from pydub import AudioSegment
 
 load_dotenv()
 
+sd.default.device = (None, None)
+
 USE_EXTERNAL_API = os.getenv("USE_EXTERNAL_API", "false").lower() == "true"
 TRANSCRIPTION_BASE_URL = os.getenv("TRANSCRIPTION_BASE_URL", None)
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", None)
@@ -221,7 +223,7 @@ def run_audio_stream(file_path = None):
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype="float32",
-            device=DEVICE
+            #device=DEVICE
         )
         print("run_audio_stream - Started recording")
         META["event"].wait(timeout=None)
