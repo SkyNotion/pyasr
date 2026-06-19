@@ -10,3 +10,6 @@ wheels/
 .venv
 
 audio/
+
+.env*
+!.env.example
