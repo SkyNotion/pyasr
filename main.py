@@ -11,6 +11,7 @@ import httpx
 import pyperclip
 from time import time
 from dotenv import load_dotenv
+from pydub import AudioSegment
 
 load_dotenv()
 
@@ -63,6 +64,13 @@ USE_CLEANER = os.getenv("USE_CLEANER", "false").lower() == "true"
 
 def gen_short_uuid(prefix = ""):
     return f"{prefix}{str(uuid.uuid4()).split("-")[4]}"
+
+def convert_wav_to_m4a(input_path):
+    file_path = f"{AUDIO_ROOT}/{gen_short_uuid("rec-conv-")}.m4a"
+    audio = AudioSegment.from_wav(input_path)
+    audio.export(file_path, format="ipod", codec="aac")
+    print(f"convert_wav_to_m4a - Converted to m4a - {os.path.basename(input_path)} -> {os.path.basename(file_path)}")
+    return file_path
 
 def llm_cleaner(text):
     if USE_EXTERNAL_API:
@@ -193,6 +201,9 @@ def run_audio_stream(file_path = None):
     print(f"run_audio_stream - Transcribing...")
 
     start_time = time()
+
+    if USE_EXTERNAL_API:
+        file_path = convert_wav_to_m4a(file_path)
 
     response = inference(file_path, OPENAI_API)
 
