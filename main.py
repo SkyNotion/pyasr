@@ -7,16 +7,30 @@ from threading import Thread, Event
 from queue import Queue
 import uuid
 import os
+import sys
 import httpx
 import gc
 import pyperclip
+import argparse
 from time import time
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
-load_dotenv()
+cmd_args_parser = argparse.ArgumentParser(prog='PYASR', description='Convert audio to text')
+cmd_args_parser.add_argument(
+    '-d', '--audio-device',
+    help='Audio device to use, default: 13',
+    type=int,
+    default=13
+)
+cmd_args_parser.add_argument(
+    '-f', '--file',
+    nargs='*',
+    help='file[s] to transcribe at first run'
+)
+cmd_args = cmd_args_parser.parse_args()
 
-sd.default.device = (None, None)
+load_dotenv()
 
 USE_EXTERNAL_API = os.getenv("USE_EXTERNAL_API", "false").lower() == "true"
 TRANSCRIPTION_BASE_URL = os.getenv("TRANSCRIPTION_BASE_URL", None)
@@ -34,8 +48,8 @@ if not os.path.exists(AUDIO_ROOT):
 sd.default.device = (None, None)
 
 SAMPLE_RATE = 48000
-CHANNELS = 2
-DEVICE = 0
+CHANNELS = 1
+DEVICE = cmd_args.audio_device
 BLOCK_SIZE  = 2048
 META = {
     "active": False,
@@ -163,7 +177,6 @@ def inference(file_path, engine):
                 "response_format": "json",
                 "language": "en",
                 "temperature": "0.0",
-                "prompt": "Transcribe to text"
             },
             files={
                 "file": open(file_path, "rb")
@@ -223,7 +236,7 @@ def run_audio_stream(file_path = None):
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
             dtype="float32",
-            #device=DEVICE
+            device=DEVICE
         )
         print("run_audio_stream - Started recording")
         META["event"].wait(timeout=None)
@@ -240,11 +253,11 @@ def run_audio_stream(file_path = None):
         write(file_path, SAMPLE_RATE, recording)
         print(f"run_audio_stream - Saved file")
 
-    print(f"run_audio_stream - Transcribing...")
+    print(f"run_audio_stream - Transcribing... - {file_path!r}")
 
     start_time = time()
 
-    if USE_EXTERNAL_API:
+    if USE_EXTERNAL_API and file_path.lower().endswith(".wav"):
         file_path = convert_wav_to_m4a(file_path)
 
     response = inference(file_path, OPENAI_API)
@@ -284,7 +297,19 @@ def serve_audio():
 def main():
     if not USE_EXTERNAL_API:
         Thread(target=serve_audio).start()
-    print("main - Started")
+    print(f"main - Started (Audio Device - {DEVICE})")
+    if cmd_args.file is not None:
+        for file in cmd_args.file:
+            if not os.path.exists(file):
+                print(f"Error - File does not exists - {file!r}")
+                sys.exit(1)
+
+            if not file.endswith((".wav", ".m4a")):
+                print(f"Error - Only wav and m4a files are supported - {file!r}")
+                sys.exit(1)
+
+            run_audio_stream(file_path=file)
+
     while True:
         if not META["active"]:
             print("main - Ready...")
